@@ -129,7 +129,7 @@
   <div class="top">
     <div class="tag">// code → .docx</div>
     <h1>Codebase to Word doc<span class="dim">.</span></h1>
-    <p>Pick a folder or a .zip. Each folder becomes a heading, each file becomes a sub-heading, and the file's code is pasted below it in Times New Roman 12pt — with a boxed slot after every file for you to paste an output screenshot.</p>
+    <p>Pick a folder or a .zip. Each folder becomes a heading, each file becomes a sub-heading, and the file's code is pasted below it in Times New Roman 12pt. If a folder also has a screenshot in it, it's dropped straight into that file's Output slot — otherwise you get a boxed space to paste one in yourself.</p>
   </div>
 
   <div class="card">
@@ -164,14 +164,21 @@
       <div class="opt-row">
         <div>
           <label class="main">Skip binary / media files</label>
-          <div class="desc">Images, fonts, archives, PDFs — anything not readable as code</div>
+          <div class="desc">Fonts, archives, PDFs, videos — anything not readable as code</div>
         </div>
         <div class="switch on" id="toggleBinary"></div>
       </div>
       <div class="opt-row">
         <div>
+          <label class="main">Auto-attach images to Output</label>
+          <div class="desc">A screenshot (png/jpg/gif/webp/bmp) next to a code file drops straight into its Output slot</div>
+        </div>
+        <div class="switch on" id="toggleImages"></div>
+      </div>
+      <div class="opt-row">
+        <div>
           <label class="main">Blank lines per output slot</label>
-          <div class="desc">Vertical space reserved under "Output:" for your screenshot</div>
+          <div class="desc">Vertical space reserved when no image is auto-attached</div>
         </div>
         <input type="number" class="numfield" id="slotSize" value="14" min="4" max="60">
       </div>
@@ -184,6 +191,7 @@
     <div class="summary" id="summary" style="display:none;">
       <span><b id="sumFiles">0</b> files</span>
       <span><b id="sumFolders">0</b> folders</span>
+      <span><b id="sumImages">0</b> images</span>
       <span><b id="sumSkipped">0</b> skipped</span>
     </div>
   </div>
@@ -199,7 +207,9 @@
     '__pycache__','.venv','venv','env','target','bin','obj','.idea','.vscode','.pytest_cache',
     'coverage','.parcel-cache','.turbo','vendor'];
   const SKIP_FILE_NAMES = ['package-lock.json','yarn.lock','pnpm-lock.yaml','composer.lock','Gemfile.lock'];
-  const BINARY_EXT = ['png','jpg','jpeg','gif','bmp','ico','webp','svg','tiff','psd',
+  const IMAGE_EXT = ['png','jpg','jpeg','gif','bmp','webp'];
+  const IMAGE_MIME = { png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', gif:'image/gif', bmp:'image/bmp', webp:'image/webp' };
+  const BINARY_EXT = ['ico','svg','tiff','psd',
     'mp3','mp4','mov','avi','wav','flac','ogg','webm',
     'zip','tar','gz','rar','7z','bz2','xz',
     'pdf','doc','docx','xls','xlsx','ppt','pptx',
@@ -207,8 +217,10 @@
     'woff','woff2','ttf','eot','otf',
     'db','sqlite','sqlite3','pyc','lock'];
   const MAX_FILE_BYTES = 1.5 * 1024 * 1024;
+  const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
   let collected = []; // {folder, filename, content, size, ext}
+  let images = []; // {folder, filename, ext, base64, size}
   let skippedCount = 0;
 
   const el = id => document.getElementById(id);
@@ -218,9 +230,11 @@
   const genBtn = el('genBtn');
   const toggleSkip = el('toggleSkip');
   const toggleBinary = el('toggleBinary');
+  const toggleImages = el('toggleImages');
 
   toggleSkip.addEventListener('click', () => toggleSkip.classList.toggle('on'));
   toggleBinary.addEventListener('click', () => toggleBinary.classList.toggle('on'));
+  toggleImages.addEventListener('click', () => toggleImages.classList.toggle('on'));
 
   el('btnFolder').addEventListener('click', () => el('folderInput').click());
   el('btnZip').addEventListener('click', () => el('zipInput').click());
@@ -248,16 +262,21 @@
     return i === -1 ? '' : name.slice(i+1).toLowerCase();
   }
 
-  function shouldSkipPath(pathParts, fname){
+  function isDirSkipped(pathParts, fname){
     if (toggleSkip.classList.contains('on')){
       if (pathParts.some(p => SKIP_DIR_PARTS.includes(p))) return true;
       if (SKIP_FILE_NAMES.includes(fname)) return true;
       if (fname.startsWith('.') && fname !== '.env.example') return true;
     }
-    if (toggleBinary.classList.contains('on')){
-      if (BINARY_EXT.includes(extOf(fname))) return true;
-    }
     return false;
+  }
+
+  // Returns 'image', 'code', or 'skip' for a given filename.
+  function classifyFile(fname){
+    const ext = extOf(fname);
+    if (IMAGE_EXT.includes(ext)) return toggleImages.classList.contains('on') ? 'image' : 'skip';
+    if (toggleBinary.classList.contains('on') && BINARY_EXT.includes(ext)) return 'skip';
+    return 'code';
   }
 
   function folderOf(relPath){
@@ -266,15 +285,36 @@
     return parts.length ? parts.join('/') : '(root)';
   }
 
+  function arrayBufferToBase64(buf){
+    let binary = '';
+    const bytes = new Uint8Array(buf);
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk){
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+  }
+
   async function handleFileList(fileArr){
     setStatus('Reading files…', false);
     collected = [];
+    images = [];
     skippedCount = 0;
     const files = Array.from(fileArr);
     for (const f of files){
       const rel = f.webkitRelativePath || f.name;
       const parts = rel.split('/').slice(0, -1);
-      if (shouldSkipPath(parts, f.name)) { skippedCount++; continue; }
+      if (isDirSkipped(parts, f.name)) { skippedCount++; continue; }
+      const kind = classifyFile(f.name);
+      if (kind === 'skip') { skippedCount++; continue; }
+      if (kind === 'image'){
+        if (f.size > MAX_IMAGE_BYTES) { skippedCount++; continue; }
+        try{
+          const buf = await f.arrayBuffer();
+          images.push({ folder: folderOf(rel), filename: f.name, ext: extOf(f.name), base64: arrayBufferToBase64(buf), size: f.size });
+        }catch(e){ skippedCount++; }
+        continue;
+      }
       if (f.size > MAX_FILE_BYTES) { skippedCount++; continue; }
       try{
         const text = await f.text();
@@ -287,6 +327,7 @@
   async function handleZip(zipFile){
     setStatus('Unzipping…', false);
     collected = [];
+    images = [];
     skippedCount = 0;
     try{
       const zip = await JSZip.loadAsync(zipFile);
@@ -296,7 +337,18 @@
         const rel = entry.name;
         const nameOnly = rel.split('/').pop();
         const parts = rel.split('/').slice(0, -1);
-        if (shouldSkipPath(parts, nameOnly)) { skippedCount++; continue; }
+        if (isDirSkipped(parts, nameOnly)) { skippedCount++; continue; }
+        const kind = classifyFile(nameOnly);
+        if (kind === 'skip') { skippedCount++; continue; }
+        if (kind === 'image'){
+          try{
+            const base64 = await entry.async('base64');
+            const approxBytes = base64.length * 0.75;
+            if (approxBytes > MAX_IMAGE_BYTES) { skippedCount++; continue; }
+            images.push({ folder: folderOf(rel), filename: nameOnly, ext: extOf(nameOnly), base64, size: Math.round(approxBytes) });
+          }catch(e){ skippedCount++; }
+          continue;
+        }
         try{
           const blob = await entry.async('uint8array');
           if (blob.byteLength > MAX_FILE_BYTES) { skippedCount++; continue; }
@@ -317,7 +369,7 @@
   }
 
   function renderList(){
-    if (!collected.length){
+    if (!collected.length && !images.length){
       fileListEl.innerHTML = '<div class="empty-hint">No readable code files found.</div>';
       summaryEl.style.display = 'none';
       genBtn.disabled = true;
@@ -326,22 +378,32 @@
     }
     const byFolder = {};
     collected.forEach(f => {
-      (byFolder[f.folder] = byFolder[f.folder] || []).push(f);
+      (byFolder[f.folder] = byFolder[f.folder] || {code:[], img:[]}).code.push(f);
+    });
+    images.forEach(f => {
+      (byFolder[f.folder] = byFolder[f.folder] || {code:[], img:[]}).img.push(f);
     });
     let html = '';
-    Object.keys(byFolder).sort().forEach(folder => {
+    const sortedFolders = Object.keys(byFolder).sort((a, b) => a.localeCompare(b, undefined, {numeric:true, sensitivity:'base'}));
+    sortedFolders.forEach(folder => {
+      byFolder[folder].code.sort((a, b) => a.filename.localeCompare(b.filename, undefined, {numeric:true, sensitivity:'base'}));
+      byFolder[folder].img.sort((a, b) => a.filename.localeCompare(b.filename, undefined, {numeric:true, sensitivity:'base'}));
       html += `<div class="row folder">${escapeHtml(folder)}</div>`;
-      byFolder[folder].forEach(f => {
+      byFolder[folder].code.forEach(f => {
         html += `<div class="row"><span class="path">${escapeHtml(f.filename)}</span><span class="size">${fmtSize(f.size)}</span></div>`;
+      });
+      byFolder[folder].img.forEach(f => {
+        html += `<div class="row"><span class="path">🖼 ${escapeHtml(f.filename)}</span><span class="size">${fmtSize(f.size)}</span></div>`;
       });
     });
     fileListEl.innerHTML = html;
     el('sumFiles').textContent = collected.length;
     el('sumFolders').textContent = Object.keys(byFolder).length;
+    el('sumImages').textContent = images.length;
     el('sumSkipped').textContent = skippedCount;
     summaryEl.style.display = 'flex';
-    genBtn.disabled = false;
-    setStatus(`Ready — ${collected.length} file(s) will be added to the document.`, false, true);
+    genBtn.disabled = collected.length === 0;
+    setStatus(`Ready — ${collected.length} file(s), ${images.length} image(s) will be added to the document.`, false, true);
   }
 
   function escapeHtml(s){
@@ -358,15 +420,64 @@
     statusEl.className = 'status' + (isErr ? ' err' : isOk ? ' ok' : '');
   }
 
+  // Pairs images with code files in the same folder: first by matching basename
+  // (01.c <-> 01.png), then, if exactly one code file and one image remain
+  // unmatched in a folder, by proximity. Anything left over is returned separately.
+  function pairImages(codeFiles, imgFiles){
+    const byFolderImages = {};
+    imgFiles.forEach(im => (byFolderImages[im.folder] = byFolderImages[im.folder] || []).push(im));
+    const byFolderCode = {};
+    codeFiles.forEach(f => (byFolderCode[f.folder] = byFolderCode[f.folder] || []).push(f));
+
+    const assigned = new Map();
+    const leftover = [];
+    const baseName = n => n.replace(/\.[^.]+$/, '').toLowerCase();
+
+    Object.keys(byFolderImages).forEach(folder => {
+      const imgs = byFolderImages[folder].slice();
+      const codes = byFolderCode[folder] || [];
+      codes.forEach(cf => {
+        const base = baseName(cf.filename);
+        const idx = imgs.findIndex(im => baseName(im.filename) === base);
+        if (idx !== -1){ assigned.set(cf, imgs[idx]); imgs.splice(idx, 1); }
+      });
+      const unmatchedCodes = codes.filter(cf => !assigned.has(cf));
+      if (imgs.length === 1 && unmatchedCodes.length === 1){
+        assigned.set(unmatchedCodes[0], imgs[0]);
+        imgs.splice(0, 1);
+      }
+      imgs.forEach(im => leftover.push(im));
+    });
+    return { assigned, leftover };
+  }
+
+  function loadImageDims(base64, mime){
+    return new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => resolve({ width: img.naturalWidth || 400, height: img.naturalHeight || 300 });
+      img.onerror = () => resolve({ width: 400, height: 300 });
+      img.src = `data:${mime};base64,${base64}`;
+    });
+  }
+
+  function emuSize(pxW, pxH){
+    const EMU_PER_PX = 9525, MAX_W = 6400800, MAX_H = 5486400; // 7in x 6in caps
+    let cx = pxW * EMU_PER_PX, cy = pxH * EMU_PER_PX;
+    if (cx > MAX_W){ const s = MAX_W / cx; cx *= s; cy *= s; }
+    if (cy > MAX_H){ const s = MAX_H / cy; cx *= s; cy *= s; }
+    return { cx: Math.max(1, Math.round(cx)), cy: Math.max(1, Math.round(cy)) };
+  }
+
   // ---------- DOCX BUILDING ----------
 
   function pPr(inner){ return `<w:pPr>${inner}</w:pPr>`; }
   function rPr(inner){ return `<w:rPr>${inner}</w:rPr>`; }
   const RFONTS = '<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>';
 
-  function paragraph({text='', bold=false, underline=false, size=24, color=null, spacingAfter=0, spacingBefore=0, pageBreakBefore=false, shading=null, leftBorder=false, preserve=true, italic=false}={}){
+  function paragraph({text='', bold=false, underline=false, size=24, color=null, spacingAfter=0, spacingBefore=0, pageBreakBefore=false, shading=null, leftBorder=false, preserve=true, italic=false, center=false}={}){
     let pprInner = `<w:spacing w:before="${spacingBefore}" w:after="${spacingAfter}" w:line="276" w:lineRule="auto"/>`;
     if (pageBreakBefore) pprInner += '<w:pageBreakBefore/>';
+    if (center) pprInner += '<w:jc w:val="center"/>';
     if (shading) pprInner += `<w:shd w:val="clear" w:color="auto" w:fill="${shading}"/>`;
     if (leftBorder) pprInner += `<w:pBdr><w:left w:val="single" w:sz="12" w:space="6" w:color="D9D9D9"/></w:pBdr>`;
     let rprInner = RFONTS + `<w:sz w:val="${size}"/><w:szCs w:val="${size}"/>`;
@@ -378,6 +489,49 @@
     const runText = `<w:t xml:space="${preserve?'preserve':'default'}">${escapeXml(text.length ? text : '')}</w:t>`;
     const run = `<w:r>${rPr(rprInner)}${runText}</w:r>`;
     return `<w:p>${pPr(pprInner)}${run}</w:p>`;
+  }
+
+  function registerImage(mediaRegistry, img){
+    mediaRegistry.mediaCounter++;
+    const filename = `image${mediaRegistry.mediaCounter}.${img.ext}`;
+    mediaRegistry.relCounter++;
+    const relId = `rId${mediaRegistry.relCounter}`;
+    mediaRegistry.rels.push({ relId, target: `media/${filename}` });
+    mediaRegistry.media.push({ filename, base64: img.base64 });
+    mediaRegistry.contentTypeExts.add(img.ext === 'jpg' ? 'jpeg' : img.ext);
+    return relId;
+  }
+
+  function imageParagraph(relId, cx, cy, docId){
+    const drawing = `<w:drawing>
+      <wp:inline distT="0" distB="0" distL="0" distR="0" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
+        <wp:extent cx="${cx}" cy="${cy}"/>
+        <wp:effectExtent l="0" t="0" r="0" b="0"/>
+        <wp:docPr id="${docId}" name="Picture ${docId}"/>
+        <wp:cNvGraphicFramePr>
+          <a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/>
+        </wp:cNvGraphicFramePr>
+        <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+          <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+            <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+              <pic:nvPicPr>
+                <pic:cNvPr id="${docId}" name="Picture ${docId}"/>
+                <pic:cNvPicPr/>
+              </pic:nvPicPr>
+              <pic:blipFill>
+                <a:blip r:embed="${relId}"/>
+                <a:stretch><a:fillRect/></a:stretch>
+              </pic:blipFill>
+              <pic:spPr>
+                <a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>
+                <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+              </pic:spPr>
+            </pic:pic>
+          </a:graphicData>
+        </a:graphic>
+      </wp:inline>
+    </w:drawing>`;
+    return `<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="0" w:after="120"/></w:pPr><w:r>${drawing}</w:r></w:p>`;
   }
 
   function outputSlotTable(rows){
@@ -402,18 +556,22 @@
     </w:tbl>`;
   }
 
-  function buildDocumentXml(){
+  function buildDocumentXml(mediaRegistry, assigned, leftoverImages){
     const byFolder = {};
     const order = [];
     collected.forEach(f => {
       if (!byFolder[f.folder]) { byFolder[f.folder] = []; order.push(f.folder); }
       byFolder[f.folder].push(f);
     });
-    order.sort();
+    order.sort((a, b) => a.localeCompare(b, undefined, {numeric:true, sensitivity:'base'}));
+    order.forEach(folder => {
+      byFolder[folder].sort((a, b) => a.filename.localeCompare(b.filename, undefined, {numeric:true, sensitivity:'base'}));
+    });
 
     const slotSize = Math.max(4, Math.min(60, parseInt(el('slotSize').value,10) || 14));
     let body = '';
     let firstBlock = true;
+    let docId = 1;
 
     order.forEach(folder => {
       body += paragraph({
@@ -440,16 +598,39 @@
 
         body += paragraph({ text:'', size:24, spacingAfter:120 });
         body += paragraph({ text:'Output:', bold:true, size:24, spacingAfter:100 });
-        body += outputSlotTable(slotSize);
+
+        const matchedImg = assigned.get(f);
+        if (matchedImg){
+          const relId = registerImage(mediaRegistry, matchedImg);
+          const { cx, cy } = emuSize(matchedImg.width, matchedImg.height);
+          body += imageParagraph(relId, cx, cy, docId++);
+          body += paragraph({ text:matchedImg.filename, italic:true, color:'A6A6A6', size:18, center:true, spacingAfter:0 });
+        } else {
+          body += outputSlotTable(slotSize);
+        }
+
         if (idx !== files.length - 1) body += paragraph({ text:'', size:24, spacingAfter:0, pageBreakBefore:true });
         else body += paragraph({ text:'', size:24, spacingAfter:0 });
       });
       firstBlock = false;
     });
 
+    if (leftoverImages && leftoverImages.length){
+      body += paragraph({ text:'Unmatched images', bold:true, underline:true, size:32, spacingBefore:240, spacingAfter:160, pageBreakBefore:true });
+      body += paragraph({ text:'These images were found but could not be matched to a single code file — check them in manually where they belong.', italic:true, color:'A6A6A6', size:22, spacingAfter:200 });
+      leftoverImages.forEach(img => {
+        const relId = registerImage(mediaRegistry, img);
+        const { cx, cy } = emuSize(img.width, img.height);
+        body += paragraph({ text:`${img.folder} / ${img.filename}`, bold:true, size:22, spacingAfter:80 });
+        body += imageParagraph(relId, cx, cy, docId++);
+        body += paragraph({ text:'', size:24, spacingAfter:200 });
+      });
+    }
+
+    const wpNs = mediaRegistry.rels.length ? ' xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"' : '';
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"${wpNs}>
   <w:body>
     ${body}
     <w:sectPr>
@@ -460,15 +641,19 @@
 </w:document>`;
   }
 
-  const CONTENT_TYPES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+  function buildContentTypesXml(imageExts){
+    const extType = { png:'image/png', jpeg:'image/jpeg', gif:'image/gif', bmp:'image/bmp', webp:'image/webp' };
+    const overrides = [...imageExts].map(ext => `  <Default Extension="${ext}" ContentType="${extType[ext] || 'image/'+ext}"/>`).join('\n');
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+${overrides ? overrides + '\n' : ''}  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
   <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
   <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
 </Types>`;
+  }
 
   const RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -477,8 +662,13 @@
   <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
 </Relationships>`;
 
-  const DOC_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`;
+  function buildDocRelsXml(imageRels){
+    const rels = imageRels.map(r => `  <Relationship Id="${r.relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${r.target}"/>`).join('\n');
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+${rels}
+</Relationships>`;
+  }
 
   const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
@@ -511,19 +701,38 @@
 
   async function generateDocx(){
     genBtn.disabled = true;
-    setStatus('Building document.xml…', false);
-    await new Promise(r => setTimeout(r, 10));
     try{
-      const documentXml = buildDocumentXml();
+      setStatus('Matching images to files…', false);
+      await new Promise(r => setTimeout(r, 10));
+      const { assigned, leftover } = pairImages(collected, images);
+      const usedImages = [...new Set([...assigned.values(), ...leftover])];
+
+      if (usedImages.length){
+        setStatus(`Reading ${usedImages.length} image(s)…`, false);
+        await Promise.all(usedImages.map(async img => {
+          const dims = await loadImageDims(img.base64, IMAGE_MIME[img.ext] || 'image/png');
+          img.width = dims.width; img.height = dims.height;
+        }));
+      }
+
+      setStatus('Building document.xml…', false);
+      await new Promise(r => setTimeout(r, 10));
+      const mediaRegistry = { relCounter:0, mediaCounter:0, rels:[], media:[], contentTypeExts:new Set() };
+      const documentXml = buildDocumentXml(mediaRegistry, assigned, leftover);
+
       const zip = new JSZip();
-      zip.file('[Content_Types].xml', CONTENT_TYPES);
+      zip.file('[Content_Types].xml', buildContentTypesXml(mediaRegistry.contentTypeExts));
       zip.folder('_rels').file('.rels', RELS);
       zip.folder('docProps').file('core.xml', CORE);
       zip.file('docProps/app.xml', APP);
       const wordFolder = zip.folder('word');
       wordFolder.file('document.xml', documentXml);
       wordFolder.file('styles.xml', STYLES);
-      wordFolder.folder('_rels').file('document.xml.rels', DOC_RELS);
+      wordFolder.folder('_rels').file('document.xml.rels', buildDocRelsXml(mediaRegistry.rels));
+      if (mediaRegistry.media.length){
+        const mediaFolder = wordFolder.folder('media');
+        mediaRegistry.media.forEach(m => mediaFolder.file(m.filename, m.base64, { base64:true }));
+      }
 
       setStatus('Zipping .docx…', false);
       await new Promise(r => setTimeout(r, 10));
@@ -540,7 +749,8 @@
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 4000);
-      setStatus(`Done — code-export.docx downloaded (${collected.length} files).`, false, true);
+      const imgNote = assigned.size ? `, ${assigned.size} image(s) auto-attached` : '';
+      setStatus(`Done — code-export.docx downloaded (${collected.length} files${imgNote}).`, false, true);
     }catch(e){
       console.error(e);
       setStatus('Something went wrong building the file: ' + e.message, true);
