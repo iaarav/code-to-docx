@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Code → Docx</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root{
+    --bg: #14161a;
+    --panel: #1b1e24;
+    --panel-2: #21252c;
+    --line: #2c313a;
+    --text: #e6e8eb;
+    --dim: #8b93a1;
+    --accent: #7ee787;
+    --accent-dim: #3fa85a;
+    --warn: #e8a33d;
+    --mono: 'SF Mono', 'Fira Code', 'Consolas', 'Menlo', monospace;
+    --sans: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:var(--sans); min-height:100vh;
+    padding:40px 20px 80px;
+  }
+  .wrap{max-width:760px; margin:0 auto;}
+
+  .top{margin-bottom:36px;}
+  .top .tag{
+    font-family:var(--mono); font-size:12px; color:var(--accent);
+    letter-spacing:0.02em; margin-bottom:10px;
+  }
+  .top h1{
+    font-family:var(--mono); font-size:28px; font-weight:600;
+    margin:0 0 8px; line-height:1.3;
+  }
+  .top h1 .dim{color:var(--dim); font-weight:400;}
+  .top p{color:var(--dim); font-size:14.5px; line-height:1.6; margin:0; max-width:58ch;}
+
+  .card{
+    background:var(--panel); border:1px solid var(--line);
+    border-radius:10px; padding:24px; margin-bottom:16px;
+  }
+  .card h2{
+    font-family:var(--mono); font-size:13px; font-weight:600;
+    color:var(--dim); text-transform:none; margin:0 0 16px;
+  }
+
+  .pickers{display:flex; gap:12px; flex-wrap:wrap;}
+  .picker-btn{
+    flex:1; min-width:180px; background:var(--panel-2); border:1px dashed var(--line);
+    border-radius:8px; padding:20px 16px; cursor:pointer; text-align:left;
+    color:var(--text); font-family:var(--sans); transition:border-color .15s, background .15s;
+  }
+  .picker-btn:hover{border-color:var(--accent-dim); background:#242832;}
+  .picker-btn .ic{font-family:var(--mono); font-size:20px; color:var(--accent); margin-bottom:8px; display:block;}
+  .picker-btn .lbl{font-size:14px; font-weight:600; display:block; margin-bottom:3px;}
+  .picker-btn .sub{font-size:12px; color:var(--dim);}
+  input[type=file]{display:none;}
+
+  .drop{
+    margin-top:12px; border:1px dashed var(--line); border-radius:8px;
+    padding:14px; text-align:center; color:var(--dim); font-size:12.5px;
+    transition:border-color .15s, color .15s;
+  }
+  .drop.over{border-color:var(--accent); color:var(--accent);}
+
+  .opts{display:flex; flex-direction:column; gap:12px;}
+  .opt-row{display:flex; align-items:center; justify-content:space-between; gap:16px;}
+  .opt-row label.main{font-size:13.5px; color:var(--text);}
+  .opt-row .desc{font-size:12px; color:var(--dim); margin-top:2px;}
+  .switch{
+    position:relative; width:38px; height:22px; flex:none;
+    background:#31363f; border-radius:20px; cursor:pointer; transition:background .15s;
+  }
+  .switch.on{background:var(--accent-dim);}
+  .switch::after{
+    content:''; position:absolute; top:2px; left:2px; width:18px; height:18px;
+    background:#e6e8eb; border-radius:50%; transition:left .15s;
+  }
+  .switch.on::after{left:18px;}
+  .numfield{
+    width:56px; background:var(--panel-2); border:1px solid var(--line); color:var(--text);
+    border-radius:6px; padding:6px 8px; font-family:var(--mono); font-size:13px; text-align:center;
+  }
+
+  .filelist{
+    max-height:220px; overflow-y:auto; font-family:var(--mono); font-size:12.5px;
+    border-top:1px solid var(--line); margin-top:16px; padding-top:12px;
+  }
+  .filelist .row{padding:3px 0; color:var(--dim); display:flex; gap:8px; align-items:baseline;}
+  .filelist .row.folder{color:var(--accent); margin-top:8px; font-weight:600;}
+  .filelist .row.folder:first-child{margin-top:0;}
+  .filelist .row .path{color:var(--text);}
+  .filelist .row .size{color:var(--dim); margin-left:auto; flex:none;}
+  .empty-hint{color:var(--dim); font-size:13px; font-style:italic;}
+
+  .summary{
+    display:flex; gap:24px; margin-top:14px; padding-top:14px; border-top:1px solid var(--line);
+    font-family:var(--mono); font-size:12.5px; color:var(--dim);
+  }
+  .summary b{color:var(--text); font-weight:600;}
+
+  .gen-btn{
+    width:100%; padding:15px; border-radius:8px; border:none; cursor:pointer;
+    background:var(--accent); color:#0d1410; font-family:var(--mono);
+    font-size:14px; font-weight:700; letter-spacing:0.01em;
+    transition:background .15s, opacity .15s;
+  }
+  .gen-btn:disabled{opacity:0.4; cursor:not-allowed;}
+  .gen-btn:not(:disabled):hover{background:#93f0a0;}
+
+  .status{
+    margin-top:12px; font-family:var(--mono); font-size:12.5px; color:var(--dim);
+    min-height:18px;
+  }
+  .status.err{color:#e8807d;}
+  .status.ok{color:var(--accent);}
+
+  ::-webkit-scrollbar{width:8px;}
+  ::-webkit-scrollbar-thumb{background:var(--line); border-radius:4px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="top">
+    <div class="tag">// code → .docx</div>
+    <h1>Codebase to Word doc<span class="dim">.</span></h1>
+    <p>Pick a folder or a .zip. Each folder becomes a heading, each file becomes a sub-heading, and the file's code is pasted below it in Times New Roman 12pt — with a boxed slot after every file for you to paste an output screenshot.</p>
+  </div>
+
+  <div class="card">
+    <h2>1. Source</h2>
+    <div class="pickers">
+      <button class="picker-btn" id="btnFolder">
+        <span class="ic">▸/</span>
+        <span class="lbl">Choose a folder</span>
+        <span class="sub">Reads every file inside it</span>
+      </button>
+      <button class="picker-btn" id="btnZip">
+        <span class="ic">▸.zip</span>
+        <span class="lbl">Choose a .zip file</span>
+        <span class="sub">Unzips it in your browser</span>
+      </button>
+    </div>
+    <input type="file" id="folderInput" webkitdirectory directory multiple>
+    <input type="file" id="zipInput" accept=".zip,application/zip">
+    <div class="drop" id="dropZone">or drag a folder / .zip file here</div>
+  </div>
+
+  <div class="card">
+    <h2>2. Options</h2>
+    <div class="opts">
+      <div class="opt-row">
+        <div>
+          <label class="main">Skip build junk</label>
+          <div class="desc">node_modules, .git, dist, build, venv, __pycache__, lockfiles…</div>
+        </div>
+        <div class="switch on" id="toggleSkip"></div>
+      </div>
+      <div class="opt-row">
+        <div>
+          <label class="main">Skip binary / media files</label>
+          <div class="desc">Images, fonts, archives, PDFs — anything not readable as code</div>
+        </div>
+        <div class="switch on" id="toggleBinary"></div>
+      </div>
+      <div class="opt-row">
+        <div>
+          <label class="main">Blank lines per output slot</label>
+          <div class="desc">Vertical space reserved under "Output:" for your screenshot</div>
+        </div>
+        <input type="number" class="numfield" id="slotSize" value="14" min="4" max="60">
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3. Files found</h2>
+    <div class="filelist" id="fileList"><div class="empty-hint">Nothing selected yet.</div></div>
+    <div class="summary" id="summary" style="display:none;">
+      <span><b id="sumFiles">0</b> files</span>
+      <span><b id="sumFolders">0</b> folders</span>
+      <span><b id="sumSkipped">0</b> skipped</span>
+    </div>
+  </div>
+
+  <button class="gen-btn" id="genBtn" disabled>Generate .docx</button>
+  <div class="status" id="status"></div>
+
+</div>
+
+<script>
+(function(){
+  const SKIP_DIR_PARTS = ['node_modules','.git','.svn','.hg','dist','build','out','.next','.nuxt',
+    '__pycache__','.venv','venv','env','target','bin','obj','.idea','.vscode','.pytest_cache',
+    'coverage','.parcel-cache','.turbo','vendor'];
+  const SKIP_FILE_NAMES = ['package-lock.json','yarn.lock','pnpm-lock.yaml','composer.lock','Gemfile.lock'];
+  const BINARY_EXT = ['png','jpg','jpeg','gif','bmp','ico','webp','svg','tiff','psd',
+    'mp3','mp4','mov','avi','wav','flac','ogg','webm',
+    'zip','tar','gz','rar','7z','bz2','xz',
+    'pdf','doc','docx','xls','xlsx','ppt','pptx',
+    'exe','dll','so','dylib','bin','class','jar','o','a',
+    'woff','woff2','ttf','eot','otf',
+    'db','sqlite','sqlite3','pyc','lock'];
+  const MAX_FILE_BYTES = 1.5 * 1024 * 1024;
+
+  let collected = []; // {folder, filename, content, size, ext}
+  let skippedCount = 0;
+
+  const el = id => document.getElementById(id);
+  const fileListEl = el('fileList');
+  const summaryEl = el('summary');
+  const statusEl = el('status');
+  const genBtn = el('genBtn');
+  const toggleSkip = el('toggleSkip');
+  const toggleBinary = el('toggleBinary');
+
+  toggleSkip.addEventListener('click', () => toggleSkip.classList.toggle('on'));
+  toggleBinary.addEventListener('click', () => toggleBinary.classList.toggle('on'));
+
+  el('btnFolder').addEventListener('click', () => el('folderInput').click());
+  el('btnZip').addEventListener('click', () => el('zipInput').click());
+  el('folderInput').addEventListener('change', e => handleFileList(e.target.files));
+  el('zipInput').addEventListener('change', e => { if (e.target.files[0]) handleZip(e.target.files[0]); });
+
+  const dropZone = el('dropZone');
+  ['dragenter','dragover'].forEach(evt => dropZone.addEventListener(evt, e => {
+    e.preventDefault(); dropZone.classList.add('over');
+  }));
+  ['dragleave','drop'].forEach(evt => dropZone.addEventListener(evt, e => {
+    e.preventDefault(); dropZone.classList.remove('over');
+  }));
+  dropZone.addEventListener('drop', e => {
+    const dt = e.dataTransfer;
+    if (dt.files && dt.files.length === 1 && dt.files[0].name.toLowerCase().endsWith('.zip')) {
+      handleZip(dt.files[0]);
+    } else if (dt.files && dt.files.length) {
+      handleFileList(dt.files);
+    }
+  });
+
+  function extOf(name){
+    const i = name.lastIndexOf('.');
+    return i === -1 ? '' : name.slice(i+1).toLowerCase();
+  }
+
+  function shouldSkipPath(pathParts, fname){
+    if (toggleSkip.classList.contains('on')){
+      if (pathParts.some(p => SKIP_DIR_PARTS.includes(p))) return true;
+      if (SKIP_FILE_NAMES.includes(fname)) return true;
+      if (fname.startsWith('.') && fname !== '.env.example') return true;
+    }
+    if (toggleBinary.classList.contains('on')){
+      if (BINARY_EXT.includes(extOf(fname))) return true;
+    }
+    return false;
+  }
+
+  function folderOf(relPath){
+    const parts = relPath.split('/');
+    parts.pop();
+    return parts.length ? parts.join('/') : '(root)';
+  }
+
+  async function handleFileList(fileArr){
+    setStatus('Reading files…', false);
+    collected = [];
+    skippedCount = 0;
+    const files = Array.from(fileArr);
+    for (const f of files){
+      const rel = f.webkitRelativePath || f.name;
+      const parts = rel.split('/').slice(0, -1);
+      if (shouldSkipPath(parts, f.name)) { skippedCount++; continue; }
+      if (f.size > MAX_FILE_BYTES) { skippedCount++; continue; }
+      try{
+        const text = await f.text();
+        collected.push({ folder: folderOf(rel), filename: f.name, content: text, size: f.size, ext: extOf(f.name) });
+      }catch(e){ skippedCount++; }
+    }
+    renderList();
+  }
+
+  async function handleZip(zipFile){
+    setStatus('Unzipping…', false);
+    collected = [];
+    skippedCount = 0;
+    try{
+      const zip = await JSZip.loadAsync(zipFile);
+      const entries = Object.values(zip.files);
+      for (const entry of entries){
+        if (entry.dir) continue;
+        const rel = entry.name;
+        const nameOnly = rel.split('/').pop();
+        const parts = rel.split('/').slice(0, -1);
+        if (shouldSkipPath(parts, nameOnly)) { skippedCount++; continue; }
+        try{
+          const blob = await entry.async('uint8array');
+          if (blob.byteLength > MAX_FILE_BYTES) { skippedCount++; continue; }
+          const text = new TextDecoder('utf-8', {fatal:false}).decode(blob);
+          collected.push({ folder: folderOf(rel), filename: nameOnly, content: text, size: blob.byteLength, ext: extOf(nameOnly) });
+        }catch(e){ skippedCount++; }
+      }
+      renderList();
+    }catch(e){
+      setStatus('Could not read that zip file: ' + e.message, true);
+    }
+  }
+
+  function fmtSize(b){
+    if (b < 1024) return b + ' B';
+    if (b < 1024*1024) return (b/1024).toFixed(1) + ' KB';
+    return (b/1024/1024).toFixed(1) + ' MB';
+  }
+
+  function renderList(){
+    if (!collected.length){
+      fileListEl.innerHTML = '<div class="empty-hint">No readable code files found.</div>';
+      summaryEl.style.display = 'none';
+      genBtn.disabled = true;
+      setStatus('', false);
+      return;
+    }
+    const byFolder = {};
+    collected.forEach(f => {
+      (byFolder[f.folder] = byFolder[f.folder] || []).push(f);
+    });
+    let html = '';
+    Object.keys(byFolder).sort().forEach(folder => {
+      html += `<div class="row folder">${escapeHtml(folder)}</div>`;
+      byFolder[folder].forEach(f => {
+        html += `<div class="row"><span class="path">${escapeHtml(f.filename)}</span><span class="size">${fmtSize(f.size)}</span></div>`;
+      });
+    });
+    fileListEl.innerHTML = html;
+    el('sumFiles').textContent = collected.length;
+    el('sumFolders').textContent = Object.keys(byFolder).length;
+    el('sumSkipped').textContent = skippedCount;
+    summaryEl.style.display = 'flex';
+    genBtn.disabled = false;
+    setStatus(`Ready — ${collected.length} file(s) will be added to the document.`, false, true);
+  }
+
+  function escapeHtml(s){
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  function escapeXml(s){
+    return String(s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&apos;');
+  }
+
+  function setStatus(msg, isErr, isOk){
+    statusEl.textContent = msg;
+    statusEl.className = 'status' + (isErr ? ' err' : isOk ? ' ok' : '');
+  }
+
+  // ---------- DOCX BUILDING ----------
+
+  function pPr(inner){ return `<w:pPr>${inner}</w:pPr>`; }
+  function rPr(inner){ return `<w:rPr>${inner}</w:rPr>`; }
+  const RFONTS = '<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>';
+
+  function paragraph({text='', bold=false, underline=false, size=24, color=null, spacingAfter=0, spacingBefore=0, pageBreakBefore=false, shading=null, leftBorder=false, preserve=true, italic=false}={}){
+    let pprInner = `<w:spacing w:before="${spacingBefore}" w:after="${spacingAfter}" w:line="276" w:lineRule="auto"/>`;
+    if (pageBreakBefore) pprInner += '<w:pageBreakBefore/>';
+    if (shading) pprInner += `<w:shd w:val="clear" w:color="auto" w:fill="${shading}"/>`;
+    if (leftBorder) pprInner += `<w:pBdr><w:left w:val="single" w:sz="12" w:space="6" w:color="D9D9D9"/></w:pBdr>`;
+    let rprInner = RFONTS + `<w:sz w:val="${size}"/><w:szCs w:val="${size}"/>`;
+    if (bold) rprInner += '<w:b/><w:bCs/>';
+    if (underline) rprInner += '<w:u w:val="single"/>';
+    if (italic) rprInner += '<w:i/><w:iCs/>';
+    if (color) rprInner += `<w:color w:val="${color}"/>`;
+    pprInner += rPr(rprInner);
+    const runText = `<w:t xml:space="${preserve?'preserve':'default'}">${escapeXml(text.length ? text : '')}</w:t>`;
+    const run = `<w:r>${rPr(rprInner)}${runText}</w:r>`;
+    return `<w:p>${pPr(pprInner)}${run}</w:p>`;
+  }
+
+  function outputSlotTable(rows){
+    // a bordered box (table) used as the screenshot placeholder
+    const border = 'sz="8" w:space="0" w:color="D9D9D9"';
+    const tblBorders = `<w:tblBorders>
+      <w:top w:val="single" ${border}/><w:left w:val="single" ${border}/>
+      <w:bottom w:val="single" ${border}/><w:right w:val="single" ${border}/>
+      <w:insideH w:val="single" ${border}/><w:insideV w:val="single" ${border}/>
+    </w:tblBorders>`;
+    let cellContent = paragraph({text:'Paste output screenshot here', italic:true, color:'A6A6A6', size:20, spacingAfter:80});
+    for (let i=1; i<rows; i++) cellContent += paragraph({text:'', size:20});
+    return `<w:tbl>
+      <w:tblPr><w:tblW w:w="0" w:type="auto"/>${tblBorders}<w:tblCellMar>
+        <w:top w:w="120" w:type="dxa"/><w:left w:w="160" w:type="dxa"/>
+        <w:bottom w:w="120" w:type="dxa"/><w:right w:w="160" w:type="dxa"/>
+      </w:tblCellMar></w:tblPr>
+      <w:tblGrid><w:gridCol w:w="9350"/></w:tblGrid>
+      <w:tr><w:tc><w:tcPr><w:tcW w:w="9350" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="FAFAFA"/></w:tcPr>
+        ${cellContent}
+      </w:tc></w:tr>
+    </w:tbl>`;
+  }
+
+  function buildDocumentXml(){
+    const byFolder = {};
+    const order = [];
+    collected.forEach(f => {
+      if (!byFolder[f.folder]) { byFolder[f.folder] = []; order.push(f.folder); }
+      byFolder[f.folder].push(f);
+    });
+    order.sort();
+
+    const slotSize = Math.max(4, Math.min(60, parseInt(el('slotSize').value,10) || 14));
+    let body = '';
+    let firstBlock = true;
+
+    order.forEach(folder => {
+      body += paragraph({
+        text: folder, bold:true, underline:true, size:32,
+        spacingBefore: firstBlock ? 0 : 240, spacingAfter: 160,
+        pageBreakBefore: !firstBlock
+      });
+      const files = byFolder[folder];
+      files.forEach((f, idx) => {
+        body += paragraph({ text:f.filename, bold:true, underline:true, size:28, spacingBefore:80, spacingAfter:160 });
+
+        const lines = f.content.replace(/\r\n/g,'\n').replace(/\t/g,'    ').split('\n');
+        if (lines.length === 1 && lines[0] === ''){
+          body += paragraph({ text:'(empty file)', italic:true, color:'A6A6A6', size:24, leftBorder:true, shading:'F7F7F7' });
+        } else {
+          lines.forEach((line, i) => {
+            body += paragraph({
+              text: line.length ? line : ' ',
+              size:24, leftBorder:true, shading:'F7F7F7',
+              spacingAfter: i===lines.length-1 ? 0 : 0
+            });
+          });
+        }
+
+        body += paragraph({ text:'', size:24, spacingAfter:120 });
+        body += paragraph({ text:'Output:', bold:true, size:24, spacingAfter:100 });
+        body += outputSlotTable(slotSize);
+        if (idx !== files.length - 1) body += paragraph({ text:'', size:24, spacingAfter:0, pageBreakBefore:true });
+        else body += paragraph({ text:'', size:24, spacingAfter:0 });
+      });
+      firstBlock = false;
+    });
+
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    ${body}
+    <w:sectPr>
+      <w:pgSz w:w="12240" w:h="15840"/>
+      <w:pgMar w:top="1080" w:right="1080" w:bottom="1080" w:left="1080" w:header="720" w:footer="720" w:gutter="0"/>
+    </w:sectPr>
+  </w:body>
+</w:document>`;
+  }
+
+  const CONTENT_TYPES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>`;
+
+  const RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>`;
+
+  const DOC_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`;
+
+  const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docDefaults>
+    <w:rPrDefault><w:rPr>
+      <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+      <w:sz w:val="24"/><w:szCs w:val="24"/>
+    </w:rPr></w:rPrDefault>
+  </w:docDefaults>
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
+    <w:name w:val="Normal"/>
+  </w:style>
+</w:styles>`;
+
+  const now = new Date().toISOString();
+  const CORE = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
+  xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:title>Code Export</dc:title>
+  <dc:creator>Code to Docx</dc:creator>
+  <dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified>
+</cp:coreProperties>`;
+
+  const APP = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties">
+  <Application>Code to Docx</Application>
+</Properties>`;
+
+  async function generateDocx(){
+    genBtn.disabled = true;
+    setStatus('Building document.xml…', false);
+    await new Promise(r => setTimeout(r, 10));
+    try{
+      const documentXml = buildDocumentXml();
+      const zip = new JSZip();
+      zip.file('[Content_Types].xml', CONTENT_TYPES);
+      zip.folder('_rels').file('.rels', RELS);
+      zip.folder('docProps').file('core.xml', CORE);
+      zip.file('docProps/app.xml', APP);
+      const wordFolder = zip.folder('word');
+      wordFolder.file('document.xml', documentXml);
+      wordFolder.file('styles.xml', STYLES);
+      wordFolder.folder('_rels').file('document.xml.rels', DOC_RELS);
+
+      setStatus('Zipping .docx…', false);
+      await new Promise(r => setTimeout(r, 10));
+      const blob = await zip.generateAsync({
+        type:'blob',
+        mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      });
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'code-export.docx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      setStatus(`Done — code-export.docx downloaded (${collected.length} files).`, false, true);
+    }catch(e){
+      console.error(e);
+      setStatus('Something went wrong building the file: ' + e.message, true);
+    }finally{
+      genBtn.disabled = false;
+    }
+  }
+
+  genBtn.addEventListener('click', generateDocx);
+})();
+</script>
+</body>
+</html>
