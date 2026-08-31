@@ -279,6 +279,26 @@
     return 'code';
   }
 
+  // Heuristic: does this decoded text actually look like binary data (compiled
+  // executables, etc.) rather than source code? XML forbids most control
+  // characters, so binary content would otherwise corrupt the .docx.
+  function looksBinary(text){
+    const sample = text.slice(0, 8000);
+    if (sample.indexOf('\u0000') !== -1) return true;
+    let control = 0;
+    for (let i = 0; i < sample.length; i++){
+      const c = sample.charCodeAt(i);
+      if (c < 32 && c !== 9 && c !== 10 && c !== 13) control++;
+    }
+    return sample.length > 0 && (control / sample.length) > 0.01;
+  }
+
+  // Strips characters XML 1.0 doesn't allow in text content, as a last-resort
+  // safety net (control chars other than tab/newline/CR, plus lone surrogates).
+  function stripInvalidXmlChars(s){
+    return s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '');
+  }
+
   function folderOf(relPath){
     const parts = relPath.split('/');
     parts.pop();
@@ -318,6 +338,7 @@
       if (f.size > MAX_FILE_BYTES) { skippedCount++; continue; }
       try{
         const text = await f.text();
+        if (looksBinary(text)) { skippedCount++; continue; }
         collected.push({ folder: folderOf(rel), filename: f.name, content: text, size: f.size, ext: extOf(f.name) });
       }catch(e){ skippedCount++; }
     }
@@ -353,6 +374,7 @@
           const blob = await entry.async('uint8array');
           if (blob.byteLength > MAX_FILE_BYTES) { skippedCount++; continue; }
           const text = new TextDecoder('utf-8', {fatal:false}).decode(blob);
+          if (looksBinary(text)) { skippedCount++; continue; }
           collected.push({ folder: folderOf(rel), filename: nameOnly, content: text, size: blob.byteLength, ext: extOf(nameOnly) });
         }catch(e){ skippedCount++; }
       }
@@ -410,7 +432,7 @@
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
   function escapeXml(s){
-    return String(s)
+    return stripInvalidXmlChars(String(s))
       .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
       .replace(/"/g,'&quot;').replace(/'/g,'&apos;');
   }
@@ -498,7 +520,7 @@
     const relId = `rId${mediaRegistry.relCounter}`;
     mediaRegistry.rels.push({ relId, target: `media/${filename}` });
     mediaRegistry.media.push({ filename, base64: img.base64 });
-    mediaRegistry.contentTypeExts.add(img.ext === 'jpg' ? 'jpeg' : img.ext);
+    mediaRegistry.contentTypeExts.add(img.ext);
     return relId;
   }
 
@@ -536,7 +558,7 @@
 
   function outputSlotTable(rows){
     // a bordered box (table) used as the screenshot placeholder
-    const border = 'sz="8" w:space="0" w:color="D9D9D9"';
+    const border = 'w:sz="8" w:space="0" w:color="D9D9D9"';
     const tblBorders = `<w:tblBorders>
       <w:top w:val="single" ${border}/><w:left w:val="single" ${border}/>
       <w:bottom w:val="single" ${border}/><w:right w:val="single" ${border}/>
@@ -642,7 +664,7 @@
   }
 
   function buildContentTypesXml(imageExts){
-    const extType = { png:'image/png', jpeg:'image/jpeg', gif:'image/gif', bmp:'image/bmp', webp:'image/webp' };
+    const extType = { png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', gif:'image/gif', bmp:'image/bmp', webp:'image/webp' };
     const overrides = [...imageExts].map(ext => `  <Default Extension="${ext}" ContentType="${extType[ext] || 'image/'+ext}"/>`).join('\n');
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
