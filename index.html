@@ -444,8 +444,8 @@
   }
 
   // Pairs images with code files in the same folder: first by matching basename
-  // (01.c <-> 01.png), then, if exactly one code file and one image remain
-  // unmatched in a folder, by proximity. Anything left over is returned separately.
+  // (01.c <-> 01.png), then assigns all remaining images when only one code file
+  // remains unmatched. Anything ambiguous is returned separately.
   function pairImages(codeFiles, imgFiles){
     const byFolderImages = {};
     imgFiles.forEach(im => (byFolderImages[im.folder] = byFolderImages[im.folder] || []).push(im));
@@ -461,13 +461,16 @@
       const codes = byFolderCode[folder] || [];
       codes.forEach(cf => {
         const base = baseName(cf.filename);
-        const idx = imgs.findIndex(im => baseName(im.filename) === base);
-        if (idx !== -1){ assigned.set(cf, imgs[idx]); imgs.splice(idx, 1); }
+        const matches = imgs.filter(im => baseName(im.filename) === base);
+        if (matches.length){
+          assigned.set(cf, matches);
+          matches.forEach(im => imgs.splice(imgs.indexOf(im), 1));
+        }
       });
       const unmatchedCodes = codes.filter(cf => !assigned.has(cf));
-      if (imgs.length === 1 && unmatchedCodes.length === 1){
-        assigned.set(unmatchedCodes[0], imgs[0]);
-        imgs.splice(0, 1);
+      if (unmatchedCodes.length === 1 && imgs.length){
+        assigned.set(unmatchedCodes[0], imgs.slice());
+        imgs.length = 0;
       }
       imgs.forEach(im => leftover.push(im));
     });
@@ -622,24 +625,25 @@
         body += paragraph({ text:'', size:24, spacingAfter:120 });
         body += paragraph({ text:'Output:', bold:true, size:24, spacingAfter:100 });
 
-        const matchedImg = assigned.get(f);
-        if (matchedImg){
-          const relId = registerImage(mediaRegistry, matchedImg);
-          const { cx, cy } = emuSize(matchedImg.width, matchedImg.height);
-          body += imageParagraph(relId, cx, cy, docId++);
-          body += paragraph({ text:matchedImg.filename, italic:true, color:'A6A6A6', size:18, center:true, spacingAfter:0 });
+        const matchedImgs = assigned.get(f) || [];
+        if (matchedImgs.length){
+          matchedImgs.forEach(matchedImg => {
+            const relId = registerImage(mediaRegistry, matchedImg);
+            const { cx, cy } = emuSize(matchedImg.width, matchedImg.height);
+            body += imageParagraph(relId, cx, cy, docId++);
+            body += paragraph({ text:matchedImg.filename, italic:true, color:'A6A6A6', size:18, center:true, spacingAfter:0 });
+          });
         } else {
           body += outputSlotTable(slotSize);
         }
 
-        if (idx !== files.length - 1) body += paragraph({ text:'', size:24, spacingAfter:0, pageBreakBefore:true });
-        else body += paragraph({ text:'', size:24, spacingAfter:0 });
+        if (idx !== files.length - 1) body += paragraph({ text:'', size:24, spacingAfter:0 });
       });
       firstBlock = false;
     });
 
     if (leftoverImages && leftoverImages.length){
-      body += paragraph({ text:'Unmatched images', bold:true, underline:true, size:32, spacingBefore:240, spacingAfter:160, pageBreakBefore:true });
+      body += paragraph({ text:'Unmatched images', bold:true, underline:true, size:32, spacingBefore:240, spacingAfter:160 });
       body += paragraph({ text:'These images were found but could not be matched to a single code file — check them in manually where they belong.', italic:true, color:'A6A6A6', size:22, spacingAfter:200 });
       leftoverImages.forEach(img => {
         const relId = registerImage(mediaRegistry, img);
@@ -728,7 +732,9 @@ ${rels}
       setStatus('Matching images to files…', false);
       await new Promise(r => setTimeout(r, 10));
       const { assigned, leftover } = pairImages(collected, images);
-      const usedImages = [...new Set([...assigned.values(), ...leftover])];
+      const usedImageSet = new Set(leftover);
+      assigned.forEach(fileImages => fileImages.forEach(img => usedImageSet.add(img)));
+      const usedImages = [...usedImageSet];
 
       if (usedImages.length){
         setStatus(`Reading ${usedImages.length} image(s)…`, false);
